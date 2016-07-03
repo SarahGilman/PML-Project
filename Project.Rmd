@@ -1,0 +1,112 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "Sarah Gilman"
+date: "July 2, 2016"
+output: html_document
+---
+
+**Model Overview** 
+The goal of this project was to predict the manner in which subjects did certain exercises; either correctly or displaying a common mistake. For this task, I used a random forest model with a five fold cross validation. I chose this method because it prioritizes accuracy over interpretability which was not a requirement. Additionally, I used principal component analysis to help reduce the size of the data set so that speed was not an issue.  
+
+The final accuracy on my training data was 100%, and on a test set 93.9% making my expected out of sample error rate 7%, or 1.4 errors in a sample of 20 questions such as the quiz. 
+
+**Data Preprocessing**
+Data Processing consisted of the following steps: 
+1) Downloading the data from the website and reading the CSV into memory
+2) Removing rows with obviously little predictivet value. This included:
+   - Features defined as factors with fewer than five levels - these were blank or error messages
+   - Features with mostly NA values - these were summary elements for each window
+   - Features such as timestamp or user name
+3) Convert all factor features to numeric features 
+
+At this point data was divided into training and test sets for further processing. I used 60% of the data for training purposes, and reserved 40% to estimate my final error rate. 
+
+4) Replace NA values. Using only the training set I impute medians for each feature and replaced all NA values in both the training and test set with these medians. 
+5) Preform PCA analysis. A summary of principal components reveals that components above 10 explain less than 1% of overall variance in the data. Therefore, I used a PCA model with 10 elements to replace all the features here. This was built using the training set only. 
+
+```{r}
+library(plyr)
+library(dplyr)
+library(caret)
+
+# (1) Download files as necessary
+if ( !file.exists("pml-training.csv") ) { 
+    download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", 
+                  "pml-training.csv", method="curl") 
+    download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", 
+                  "pml-testing.csv", method="curl") 
+}
+workout = read.csv("pml-training.csv")
+
+# (2) Remove bad rows 
+cutoffNA <- count(workout) * (max(workout$num_window) / count(workout))
+toremoveIndx <- sapply(workout[1:160], function(x) (is.factor(x) && nlevels(x) < 5) )
+toremoveIndx <- toremoveIndx | sapply(workout[1:160], function(x) (sum(is.na(x)) > cutoffNA)) 
+toremoveIndx[1:7] = TRUE
+workout <- workout[, !toremoveIndx]
+
+# (3) Convert remaining factors to numeric
+feats <- dim(workout)[2]-1
+toconvertIndx <- sapply(workout[1:feats], is.factor)
+workout[toconvertIndx] <- lapply(workout[toconvertIndx], function(x) as.numeric(x))
+
+# Divide into training and testing sets
+set.seed(32142)
+inTrain <- createDataPartition(y=workout$classe, p=0.6, list=FALSE)
+training <- workout[inTrain,]
+testing <- workout[-inTrain,]
+
+# (4) Fill all NA values
+naFiller <- preProcess(training[1:feats], method="medianImpute")
+training <- predict(naFiller, training)
+testing <- predict(naFiller, testing)
+
+# (5) Perform PCA to limit the data set 
+prComp <- prcomp(training[1:feats])
+pcaProc <- preProcess(training[1:feats], method="pca", pcaComp=10)
+trainPC <- predict(pcaProc, training[1:feats])
+summary(prComp)
+```
+
+**Model Execution**
+
+I used a random forest available in the caret class with a fve fold cross validation on the training data compressed with PCA. 
+
+```{r}
+# Fit a random forest model to the PCA training results 
+modelRF <- train(training$classe ~ ., data=trainPC, method="rf", verbose=FALSE, 
+                 trControl=trainControl(method="cv",number=5))
+```
+
+**Model Results**
+
+Accuracy on the training data was 100% for all classes. 
+```{r} 
+confusionMatrix(predict(modelRF, trainPC), training$classe) 
+```
+
+Accuracy on the testing data was lower, ranging from 92.6% to 96.2% depending on classe. Overall accuracy was more than acceptable for the quiz. 
+
+```{r} 
+confusionMatrix(predict(modelRF, predict(pcaProc, testing[1:feats])), testing$classe)
+```
+
+**Novel Prediction**
+
+The final step for this project was to perform class prediction for novel samples. This forst followed preprocessing steps, in summary: 
+
+1) Read appropriate CSV file
+2) Remove irrelevant or likely blank features
+3) Convert factor features to numeric
+4) Fill all NA values with medians imputed from the training data
+5) Compress the data with the PCA rules developed from the training data
+
+Final predictions are listed below. They contained 19/20 correct answers, comparable to the expected error rate calculated. 
+
+```{r}
+validation = read.csv("pml-testing.csv")
+validation <- validation[, !toremoveIndx]
+validation[toconvertIndx] <- lapply(validation[toconvertIndx], function(x) as.numeric(x))
+validation <- predict(naFiller, validation)
+predict(modelRF, predict(pcaProc, validation[1:feats]))
+```
